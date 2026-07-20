@@ -1,12 +1,358 @@
 # Windows Wallpaper Changer
 
-A Node.js application that automatically changes your Windows desktop wallpaper at a configurable interval using images from **Unsplash**, **Pexels**, or **Wallhaven**.
+A Node.js script that automatically rotates your Windows desktop wallpaper from a **local image library**. It runs once and exits — scheduling is handled by Windows Task Scheduler so there's no persistent process to manage.
+
+Images are sourced from **Pinterest** via an automated Playwright-based scraper (no API key required).
 
 ---
 
 ## Features
 
-- 🎨 **Multiple providers** – Unsplash, Pexels, Wallhaven (easily extensible)
+- 🖼️ **Local-first** — wallpapers live in `wallpapers/<category>/` folders; no API calls at change time
+- 🤖 **Auto-scrape** — if a category drops below the threshold, Pinterest is scraped silently in the background
+- 🗑️ **Auto-delete** — optionally delete each wallpaper after it's used, keeping the library perpetually fresh
+- 🔁 **Duplicate prevention** — history file prevents the same image from appearing twice
+- 🗂️ **15 categories** — anime, cyberpunk, dark, aesthetic, lofi, nature, space, minimal, and more
+- ⚡ **Run-and-exit** — pairs perfectly with Windows Task Scheduler; no long-running Node process
+- 🔒 **Resilient** — full error handling; failed scrapes never block wallpaper selection
+
+---
+
+## Project Structure
+
+```
+Wallpaper-script/
+│
+├── src/
+│   ├── providers/
+│   │   └── local.js           ← Picks a random image from wallpapers/
+│   │
+│   ├── scraper/
+│   │   ├── pinterest.js       ← Playwright-based Pinterest scraper
+│   │   ├── autoScraper.js     ← Fires background scrapes when stock is low
+│   │   └── scrapeAll.js       ← Manually scrape every configured category
+│   │
+│   ├── config.js              ← Loads & validates .env
+│   ├── logger.js              ← Coloured console logger
+│   ├── downloader.js          ← Downloads images to wallpapers/<category>/
+│   ├── historyManager.js      ← Duplicate-prevention history
+│   └── index.js               ← Entry point (run-and-exit)
+│
+├── wallpapers/
+│   ├── anime/                 ← Scraped anime wallpapers
+│   ├── cyberpunk/             ← Scraped cyberpunk wallpapers
+│   └── …                     ← One folder per category
+│
+├── cache/
+│   ├── current.jpg            ← Active wallpaper (auto-managed)
+│   └── history.json           ← Seen wallpaper IDs (auto-managed)
+│
+├── .env                       ← Your personal config
+├── package.json
+└── README.md
+```
+
+---
+
+## Installation
+
+```powershell
+# 1. Clone / download the project
+cd D:\Wallpaper-script
+
+# 2. Install dependencies
+npm install
+
+# 3. Install Playwright browser (used by the Pinterest scraper)
+npx playwright install chromium
+```
+
+> **Node ≥ 18** is required.
+
+---
+
+## Quick Start
+
+```powershell
+# Manually trigger one wallpaper change
+npm start
+
+# Pre-fill the library before scheduling (optional but recommended)
+npm run scrape:all
+```
+
+`npm start` will:
+1. Print a startup banner with your current config
+2. Scan `wallpapers/` for available images
+3. Trigger background Pinterest scrapes for any category below the threshold
+4. Pick a random image, set it as the desktop wallpaper, and exit
+5. Delete the used file from disk (if `AUTO_DELETE_USED=true`)
+
+```
+╔══════════════════════════════════════════════╗
+║       🖼  Windows Wallpaper Changer          ║
+╚══════════════════════════════════════════════╝
+
+[INFO]  2026-07-20T18:00:00.000Z - Categories : anime, cyberpunk, dark, aesthetic, lofi
+[INFO]  2026-07-20T18:00:00.000Z - Auto-scrape: trigger < 20 images/category, fetch 40 per run
+
+[INFO]  2026-07-20T18:00:00.112Z - [LocalProvider] Image pool: 174 total (anime:29, cyberpunk:30, dark:32, aesthetic:28, lofi:29, misc:26)
+[OK]    2026-07-20T18:00:00.254Z - ✔ Wallpaper set: D:\Wallpaper-script\wallpapers\cyberpunk\pin_cyberpunk_a3a4223d.jpg
+[INFO]  2026-07-20T18:00:00.260Z - 🗑  Deleted used wallpaper: …\cyberpunk\pin_cyberpunk_a3a4223d.jpg
+```
+
+---
+
+## Configuration
+
+Edit `.env` to customise behaviour:
+
+| Variable           | Default | Description                                                      |
+|--------------------|---------|------------------------------------------------------------------|
+| `CATEGORY`         | `anime` | Comma-separated list of active categories (see below)            |
+| `KEEP_HISTORY`     | `true`  | Prevent duplicate wallpapers (`true` / `false`)                  |
+| `HISTORY_MAX_SIZE` | `5000`  | Max IDs stored in history before it is trimmed                   |
+| `SCRAPE_THRESHOLD` | `20`    | Trigger a scrape when a category has fewer than this many images |
+| `SCRAPE_COUNT`     | `40`    | Images to download per category per auto-scrape run              |
+| `AUTO_DELETE_USED` | `true`  | Delete a wallpaper from disk after it has been set               |
+
+### Available Categories
+
+| Category       | Description                              |
+|----------------|------------------------------------------|
+| `anime`        | Anime art and illustrations              |
+| `aesthetic`    | Pastel, soft, dreamy visuals             |
+| `lofi`         | Lo-fi / chill aesthetic scenes           |
+| `cyberpunk`    | Neon-lit futuristic cityscapes           |
+| `dark`         | Dark, moody atmospheres                  |
+| `programming`  | Code, developer aesthetic, tech          |
+| `abstract`     | Abstract art and patterns                |
+| `architecture` | Buildings, bridges, city structure       |
+| `nature`       | Forests, rivers, green landscapes        |
+| `mountains`    | Mountain ranges, peaks, snow             |
+| `minimal`      | Clean, simple, minimalist compositions   |
+| `space`        | Galaxies, nebulae, planets               |
+| `gaming`       | Game art and screenshots                 |
+| `cars`         | Cars and motorsport                      |
+| `city`         | Urban cityscapes                         |
+
+Use a comma-separated list in `.env`:
+
+```env
+CATEGORY=anime,cyberpunk,dark,aesthetic,lofi
+```
+
+---
+
+## Auto-Delete Behaviour
+
+When `AUTO_DELETE_USED=true` (the default), each wallpaper file is **deleted from disk immediately after it is set**. This means:
+
+- The library is self-pruning — you never see the same image twice
+- The auto-scraper automatically refills any category that drops below `SCRAPE_THRESHOLD`
+- Set `AUTO_DELETE_USED=false` to keep files on disk (history file still prevents repeats)
+
+---
+
+## Scraping Manually
+
+To bulk-download images before your first scheduled run:
+
+```powershell
+# Scrape all configured categories
+npm run scrape:all
+
+# Run the Pinterest scraper directly (useful for debugging)
+npm run scrape:pinterest
+```
+
+---
+
+## Windows Task Scheduler Setup
+
+The script is designed to **run once and exit**. Windows Task Scheduler calls it on a repeating schedule — no persistent Node process is needed.
+
+### Step 1 — Open Task Scheduler
+
+Press `Win + R`, type `taskschd.msc`, and press **Enter**.
+
+### Step 2 — Create a New Task
+
+In the right panel, click **Create Task…** (not "Create Basic Task").
+
+### Step 3 — General Tab
+
+| Field                       | Value                                          |
+|-----------------------------|------------------------------------------------|
+| Name                        | `Wallpaper Changer`                            |
+| Description                 | `Rotates desktop wallpaper from local library` |
+| Security options            | **Run only when user is logged on**            |
+| Run with highest privileges | ✅ Checked                                      |
+
+> Keep **Run only when user is logged on** — setting a wallpaper requires an active desktop session.
+
+### Step 4 — Triggers Tab
+
+#### Trigger 1: Repeating schedule
+
+Click **New…** and configure:
+
+| Setting           | Value                |
+|-------------------|----------------------|
+| Begin the task    | **On a schedule**    |
+| Settings          | **Daily**            |
+| Repeat task every | **30 minutes**       |
+| For a duration of | **Indefinitely**     |
+| Enabled           | ✅ Checked            |
+
+Click **OK**.
+
+#### Trigger 2: At log on (optional)
+
+Click **New…** again:
+
+| Setting        | Value              |
+|----------------|--------------------|
+| Begin the task | **At log on**      |
+| Specific user  | *(your Windows user)* |
+| Delay task for | `30 seconds`       |
+| Enabled        | ✅ Checked          |
+
+Click **OK**.
+
+### Step 5 — Actions Tab
+
+Click **New…** and configure:
+
+| Setting        | Value                   |
+|----------------|-------------------------|
+| Action         | **Start a program**     |
+| Program/script | `node`                  |
+| Add arguments  | `src/index.js`          |
+| Start in       | `D:\Wallpaper-script`   |
+
+> If `node` is not in your PATH, use the full path:
+> `C:\Program Files\nodejs\node.exe`
+
+Click **OK**.
+
+### Step 6 — Conditions Tab
+
+| Setting                                            | Value       |
+|----------------------------------------------------|-------------|
+| Start the task only if the computer is on AC power | ❌ Uncheck  |
+
+*(Important for laptops — ensures it runs on battery too.)*
+
+### Step 7 — Settings Tab
+
+| Setting                                                     | Value      |
+|-------------------------------------------------------------|------------|
+| Allow task to be run on demand                              | ✅ Check   |
+| If the task is already running, do not start a new instance | ✅ Check   |
+| Stop the task if it runs longer than                        | ❌ Uncheck |
+
+### Step 8 — Save
+
+Click **OK** and enter your Windows password if prompted.
+
+---
+
+### Managing the Task via PowerShell
+
+```powershell
+# Manually trigger the task right now
+schtasks /run /tn "Wallpaper Changer"
+
+# Check task status and last run result
+schtasks /query /tn "Wallpaper Changer" /fo LIST /v
+
+# Disable the task (stops automatic runs)
+schtasks /change /tn "Wallpaper Changer" /disable
+
+# Re-enable the task
+schtasks /change /tn "Wallpaper Changer" /enable
+
+# Delete the task entirely
+schtasks /delete /tn "Wallpaper Changer" /f
+```
+
+---
+
+### Running Silently (No Console Window Flash)
+
+By default, Windows briefly shows a console window when the task runs. To suppress it, create a VBScript wrapper:
+
+**`run-silent.vbs`** (save in project root `D:\Wallpaper-script\`):
+
+```vbscript
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "node src/index.js", 0, False
+```
+
+Then update the Task Scheduler Action:
+
+| Setting        | Value                                    |
+|----------------|------------------------------------------|
+| Program/script | `wscript.exe`                            |
+| Add arguments  | `D:\Wallpaper-script\run-silent.vbs`     |
+| Start in       | `D:\Wallpaper-script`                    |
+
+---
+
+## Troubleshooting
+
+### "No wallpaper images found"
+
+The `wallpapers/` folder is empty. Run:
+
+```powershell
+npm run scrape:all
+```
+
+### "All wallpapers have been seen"
+
+The history contains every image ID. Reset it:
+
+```powershell
+del cache\history.json
+```
+
+Or use `AUTO_DELETE_USED=true` so images are deleted after use — history becomes unnecessary.
+
+### Pinterest scraper fails
+
+- Ensure Playwright Chromium is installed: `npx playwright install chromium`
+- Pinterest may throttle scraping — reduce `SCRAPE_COUNT` in `.env`
+- Run `npm run scrape:pinterest` in a visible terminal to watch the browser
+
+### Task Scheduler runs but wallpaper doesn't change
+
+- Check **Last Run Result** in Task Scheduler — `0x0` means success; anything else is an error code
+- Confirm **Start in** is set to `D:\Wallpaper-script`
+- Make sure `node` is in the system PATH or use the full `node.exe` path in the action
+
+### Wallpaper doesn't change on battery
+
+In the Conditions tab, uncheck **Start the task only if the computer is on AC power**.
+
+---
+
+## Resetting History
+
+```powershell
+del cache\history.json
+```
+
+The file is recreated automatically on the next run.
+
+---
+
+## License
+
+MIT — free for personal use.
+
+ – Unsplash, Pexels, Wallhaven (easily extensible)
 - 🔁 **Duplicate prevention** – never shows the same wallpaper twice (persisted across reboots)
 - ⏱️ **Flexible scheduling** – 15 min, 30 min, 1 h, 6 h, 12 h, or daily
 - 🗂️ **10 categories** – nature, mountains, minimal, space, cyberpunk, programming, dark, abstract, architecture, anime
