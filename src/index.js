@@ -1,16 +1,23 @@
 /**
  * index.js
  *
- * Application entry point.
- * Validates configuration, sets up the cache directory, and starts the scheduler.
+ * Entry point — picks one random wallpaper from the local library,
+ * sets it as the desktop background, then exits.
+ *
+ * Scheduling is handled externally (Windows Task Scheduler, cron, etc.)
  */
+
+import fs from 'fs/promises';
+import wallpaperPkg from 'wallpaper';
+const { set: setWallpaper } = wallpaperPkg;
 
 import config from './config.js';
 import * as logger from './logger.js';
 import { ensureCacheDir } from './downloader.js';
-import { startScheduler } from './scheduler.js';
+import { loadHistory, addToHistory } from './historyManager.js';
+import { getRandomWallpaper } from './providers/local.js';
 
-// ── Startup banner ────────────────────────────────────────────────────────────
+// ── Startup banner ─────────────────────────────────────────────────────────────
 
 function printBanner() {
   console.log('');
@@ -18,50 +25,70 @@ function printBanner() {
   console.log('║       🖼  Windows Wallpaper Changer          ║');
   console.log('╚══════════════════════════════════════════════╝');
   console.log('');
-  logger.info(`Provider   : ${config.source}`);
   logger.info(`Categories : ${config.categories.join(', ')}`);
-  logger.info(`Interval   : ${config.intervalDisplay}`);
-  logger.info(`History    : ${config.keepHistory ? `enabled (max ${config.historyMaxSize} entries)` : 'disabled'}`);
-  if (config.source === 'local') {
-    logger.info(`Auto-scrape: trigger < ${config.scrapeThreshold} images/category, fetch ${config.scrapeCount} per run`);
-  }
+  logger.info(`Auto-scrape: trigger < ${config.scrapeThreshold} images/category, fetch ${config.scrapeCount} per run`);
   console.log('');
 }
 
-// ── API key validation ────────────────────────────────────────────────────────
-
-/**
- * Warns if the configured provider's API key is missing.
- * Does not exit – lets the provider give a descriptive error on first fetch.
- */
-function warnMissingKeys() {
-  const keyMap = {
-    unsplash:  { key: config.unsplashKey,  name: 'UNSPLASH_KEY' },
-    pexels:    { key: config.pexelsKey,    name: 'PEXELS_KEY' },
-    wallhaven: { key: config.wallhavenKey, name: 'WALLHAVEN_KEY (optional)' },
-  };
-
-  const { key, name } = keyMap[config.source] || {};
-
-  if (key === '' && config.source !== 'wallhaven') {
-    logger.warn(`API key not set: ${name}. Add it to your .env file.`);
-  }
-}
-
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────────────────────────
 
 async function main() {
   printBanner();
-  warnMissingKeys();
-
-  // Ensure cache directory is ready before the scheduler fires
   await ensureCacheDir();
 
-  // Start the cron scheduler (runs once immediately, then on interval)
-  startScheduler();
+  // Load seen history for duplicate prevention
+  const history = config.keepHistory ? await loadHistory() : [];
+
+  // Try to find a wallpaper not yet seen (up to 20 attempts)
+  const MAX_ATTEMPTS = 20;
+  let wallpaper = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const candidate = await getRandomWallpaper();
+
+    if (!history.includes(candidate.sourceId)) {
+      wallpaper = candidate;
+      if (attempt > 1) logger.info(`Found a new wallpaper after ${attempt} attempts.`);
+      break;
+    }
+
+    logger.info(`Already seen (${candidate.sourceId}). Trying another... (${attempt}/${MAX_ATTEMPTS})`);
+  }
+
+  if (!wallpaper) {
+    logger.warn('All wallpapers have been seen. Resetting and picking any random one.');
+    wallpaper = await getRandomWallpaper();
+  }
+
+  // Set the wallpaper
+  try {
+    await setWallpaper(wallpaper.localPath);
+    logger.success(`✔ Wallpaper set: ${wallpaper.localPath}`);
+  } catch (err) {
+    logger.error(`Failed to set wallpaper: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Auto-delete the used wallpaper from disk if configured
+  if (config.autoDeleteUsed) {
+    try {
+      await fs.unlink(wallpaper.localPath);
+      logger.info(`🗑  Deleted used wallpaper: ${wallpaper.localPath}`);
+    } catch (err) {
+      logger.warn(`Could not delete used wallpaper: ${err.message}`);
+    }
+  }
+
+  // Record in history
+  if (config.keepHistory) {
+    await addToHistory(wallpaper.sourceId);
+  }
+
+  // Done — exit cleanly so the OS scheduler can call us again next time
+  process.exit(0);
 }
 
-main().catch((err) => {
-  logger.error(`Fatal startup error: ${err.message}`, err);
+main().catch(err => {
+  logger.error(`Fatal error: ${err.message}`, err);
   process.exit(1);
 });

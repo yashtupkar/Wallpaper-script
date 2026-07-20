@@ -1,29 +1,25 @@
 {
   "name": "wallpaper-changer",
-  "version": "1.0.0",
-  "description": "Automatically changes Windows desktop wallpaper at configurable intervals using multiple image providers.",
+  "version": "2.0.0",
+  "description": "Sets a random desktop wallpaper from a local library. Run once and exit — schedule externally via Windows Task Scheduler or cron.",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "scrape:pinterest": "node src/scraper/pinterest.js",
-    "scrape:all": "node src/scraper/scrapeAll.js"
+    "scrape:all": "node src/scraper/scrapeAll.js",
+    "scrape:pinterest": "node src/scraper/pinterest.js"
   },
   "keywords": [
     "wallpaper",
     "windows",
     "automation",
-    "unsplash",
-    "pexels",
-    "wallhaven"
+    "pinterest"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
-    "node-cron": "^3.0.3",
     "playwright": "^1.61.1",
     "wallpaper": "^4.1.1"
   },
